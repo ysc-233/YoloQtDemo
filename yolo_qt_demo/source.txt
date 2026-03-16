@@ -1,0 +1,479 @@
+#include "mainwindow.h"
+
+#include <QApplication>
+
+int main(int argc, char *argv[])
+{
+    QApplication a(argc, argv);
+    MainWindow w;
+    w.show();
+    return a.exec();
+}
+
+#include "mainwindow.h"
+#include <QPixmap>
+#include <QImage>
+#include <QDateTime>
+#include <chrono>
+#include <QDebug>
+#include <QApplication>
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent) {
+    setupUI();
+    // Initialize YOLO model
+    QString model_path = "D:/Shichen.Yang/projects/yolo_qt_demo/yolo_qt_demo/models/test.onnx";
+
+    std::cout << "Model path: " << model_path.toStdString() << std::endl;
+    QFileInfo file_info(model_path);
+    if (!file_info.exists()) {
+        QMessageBox::critical(this, "Critical Error",
+            "Model file not found!\n\nPath: " + model_path +
+            "\n\nPlease place your ONNX model in the models folder.");
+        status_label->setText("Status: Model File Not Found");
+        return;
+    }
+
+    yolo = std::make_unique<YOLOInference>(model_path.toStdString());
+
+    if (!yolo->isLoaded()) {
+        QMessageBox::critical(this, "Critical Error",
+            "Failed to load model!\n\nPossible reasons:\n"
+            "1. Invalid ONNX file format\n"
+            "2. OpenCV version incompatibility\n"
+            "3. Corrupted model file");
+        status_label->setText("Status: Model Load Failed");
+        infer_button->setEnabled(false);
+        return;
+    }
+
+    status_label->setText("Status: Ready");
+    infer_button->setEnabled(true);
+}
+
+MainWindow::~MainWindow() {}
+
+void MainWindow::setupUI() {
+    setWindowTitle("YOLO Object Detection Demo");
+    resize(1000, 700);
+
+    // Central widget
+    QWidget* central = new QWidget(this);
+    setCentralWidget(central);
+
+    QVBoxLayout* main_layout = new QVBoxLayout(central);
+
+    // Image display area
+    image_label = new QLabel(this);
+    image_label->setMinimumSize(800, 500);
+    image_label->setAlignment(Qt::AlignCenter);
+    image_label->setStyleSheet("QLabel { background-color: #2b2b2b; color: white; border: 1px solid #555; }");
+    image_label->setText("Please load an image");
+    main_layout->addWidget(image_label);
+
+    // Button area
+    QHBoxLayout* button_layout = new QHBoxLayout();
+
+    load_button = new QPushButton("Load Image", this);
+    load_button->setFixedHeight(40);
+    connect(load_button, &QPushButton::clicked, this, &MainWindow::on_loadButton_clicked);
+
+    infer_button = new QPushButton("Run Inference", this);
+    infer_button->setFixedHeight(40);
+    infer_button->setEnabled(false);
+    connect(infer_button, &QPushButton::clicked, this, &MainWindow::on_inferButton_clicked);
+
+    clear_button = new QPushButton("Clear", this);
+    clear_button->setFixedHeight(40);
+    connect(clear_button, &QPushButton::clicked, this, &MainWindow::on_clearButton_clicked);
+
+    button_layout->addWidget(load_button);
+    button_layout->addWidget(infer_button);
+    button_layout->addWidget(clear_button);
+    button_layout->addStretch();
+
+    // Status display
+    status_label = new QLabel("Status: Initializing...", this);
+    status_label->setFixedHeight(30);
+
+    fps_label = new QLabel("FPS: --", this);
+    fps_label->setFixedHeight(30);
+    fps_label->setStyleSheet("QLabel { color: #00ff00; font-weight: bold; }");
+
+    button_layout->addWidget(status_label);
+    button_layout->addWidget(fps_label);
+
+    main_layout->addLayout(button_layout);
+}
+
+void MainWindow::on_loadButton_clicked() {
+    QString file_path = QFileDialog::getOpenFileName(
+        this, "Select Image", "",
+        "Image Files (*.jpg *.jpeg *.png *.bmp *.tif)"
+    );
+
+    if (file_path.isEmpty()) {
+        return;
+    }
+
+    current_image = cv::imread(file_path.toStdString());
+    if (current_image.empty()) {
+        QMessageBox::warning(this, "Error", "Failed to load image!");
+        return;
+    }
+
+    result_image = current_image.clone();
+    displayImage(result_image);
+
+    infer_button->setEnabled(true);
+    status_label->setText(QString("Status: Image Loaded (%1 x %2)")
+                          .arg(current_image.cols).arg(current_image.rows));
+}
+
+void MainWindow::on_inferButton_clicked() {
+    if (current_image.empty() || !yolo->isLoaded()) {
+        QMessageBox::warning(this, "Warning", "Please load an image or check the model!");
+        return;
+    }
+
+    // Timing
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // Inference
+    std::vector<Detection> detections = yolo->infer(current_image);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    float fps = 1000.0f / duration.count();
+
+    // Draw results
+    result_image = current_image.clone();
+    drawDetections(result_image, detections);
+    displayImage(result_image);
+
+    // Update status
+    status_label->setText(QString("Status: %1 object(s) detected")
+                          .arg(detections.size()));
+    fps_label->setText(QString("Inference Time: %1 ms | FPS: %2")
+                       .arg(duration.count()).arg(fps, 0, 'f', 1));
+
+    // Print detection results
+    qDebug() << "=== Detection Results ===";
+    for (const auto& det : detections) {
+        qDebug() << QString("Class: %1 | Confidence: %2 | Box: [%3, %4, %5, %6]")
+                    .arg(det.class_name.c_str())
+                    .arg(det.confidence, 0, 'f', 2)
+                    .arg(det.bbox.x).arg(det.bbox.y)
+                    .arg(det.bbox.width).arg(det.bbox.height);
+    }
+}
+
+void MainWindow::on_clearButton_clicked() {
+    current_image.release();
+    result_image.release();
+    image_label->clear();
+    image_label->setText("Please load an image");
+    infer_button->setEnabled(false);
+    status_label->setText("Status: Ready");
+    fps_label->setText("FPS: --");
+}
+
+void MainWindow::displayImage(const cv::Mat& image) {
+    if (image.empty()) return;
+
+    cv::Mat rgb;
+    cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB);
+
+    QImage qimg(rgb.data, rgb.cols, rgb.rows,
+                static_cast<int>(rgb.step),
+                QImage::Format_RGB888);
+
+    QPixmap pixmap = QPixmap::fromImage(qimg);
+    image_label->setPixmap(pixmap.scaled(
+        image_label->size(),
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation
+    ));
+}
+
+void MainWindow::drawDetections(cv::Mat& image, const std::vector<Detection>& detections) {
+    static const std::vector<cv::Scalar> colors = {
+        cv::Scalar(0, 255, 0), cv::Scalar(0, 0, 255), cv::Scalar(255, 0, 0),
+        cv::Scalar(255, 255, 0), cv::Scalar(0, 255, 255), cv::Scalar(255, 0, 255)
+    };
+
+    for (const auto& det : detections) {
+        cv::Scalar color = colors[det.class_id % colors.size()];
+
+        // Draw bounding box
+        cv::rectangle(image, det.bbox, color, 2);
+
+        // Draw label background
+        std::string label = det.class_name + ": " +
+                           std::to_string(static_cast<int>(det.confidence * 100)) + "%";
+        int baseline;
+        cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                             0.6, 2, &baseline);
+        cv::Point text_origin(det.bbox.x, det.bbox.y - 10);
+        cv::rectangle(image,
+                     cv::Point(text_origin.x, text_origin.y - text_size.height),
+                     cv::Point(text_origin.x + text_size.width, text_origin.y + baseline),
+                     color, -1);
+
+        // Draw text
+        cv::putText(image, label, text_origin, cv::FONT_HERSHEY_SIMPLEX,
+                   0.6, cv::Scalar(255, 255, 255), 2);
+    }
+}
+
+#include "yoloinference.h"
+#include "onnxruntime_cxx_api.h"
+#include <iostream>
+#include <fstream>
+#include <algorithm>
+
+YOLOInference::YOLOInference(const std::string& model_path, float conf_thresh, float nms_thresh)
+    : conf_threshold(conf_thresh), nms_threshold(nms_thresh) {
+
+    std::cout << "Loading model: " << model_path << std::endl;
+
+    // 检查文件是否存在
+    std::ifstream file(model_path);
+    if (!file.good()) {
+        std::cerr << "ERROR: Model file not found: " << model_path << std::endl;
+        return;
+    }
+    file.close();
+
+    try {
+        // 创建环境
+        env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "YOLOInference");
+
+        // 创建会话选项
+        session_options = std::make_unique<Ort::SessionOptions>();
+        session_options->SetIntraOpNumThreads(1);
+        session_options->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+        // 加载模型（需要宽字符串）
+        std::wstring wide_model_path(model_path.begin(), model_path.end());
+        session = std::make_unique<Ort::Session>(*env, wide_model_path.c_str(), *session_options);
+
+        if (session == nullptr) {
+            std::cerr << "ERROR: Failed to create ONNX session!" << std::endl;
+            return;
+        }
+
+        // 获取输入节点信息
+        Ort::AllocatorWithDefaultOptions allocator;
+        size_t num_input_nodes = session->GetInputCount();
+
+        for (size_t i = 0; i < num_input_nodes; i++) {
+            auto input_name = session->GetInputNameAllocated(i, allocator);
+            input_names.push_back(input_name.get());
+
+            std::cout << "Input " << i << ": " << input_names.back() << std::endl;
+        }
+
+        // 获取输出节点信息
+        size_t num_output_nodes = session->GetOutputCount();
+
+        for (size_t i = 0; i < num_output_nodes; i++) {
+            auto output_name = session->GetOutputNameAllocated(i, allocator);
+            output_names.push_back(output_name.get());
+
+            std::cout << "Output " << i << ": " << output_names.back() << std::endl;
+        }
+
+        std::cout << "Model loaded successfully!" << std::endl;
+        model_loaded = true;
+
+    } catch (const Ort::Exception& e) {
+        std::cerr << "ERROR: ONNX Runtime exception: " << e.what() << std::endl;
+        session = nullptr;
+        return;
+    }
+}
+
+YOLOInference::~YOLOInference() {
+    // 智能指针自动清理
+}
+
+void YOLOInference::prepareInput(const cv::Mat& image, std::vector<float>& input_tensor) {
+    // 调整大小
+    cv::Mat resized;
+    cv::resize(image, resized, cv::Size(input_width, input_height), 0, 0, cv::INTER_LINEAR);
+
+    // BGR -> RGB
+    cv::Mat rgb;
+    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+
+    // 归一化到 [0, 1]
+    rgb.convertTo(rgb, CV_32FC3, 1.0 / 255.0);
+
+    // HWC -> CHW
+    std::vector<cv::Mat> channels(3);
+    cv::split(rgb, channels);
+
+    input_tensor.resize(3 * input_height * input_width);
+
+    for (int c = 0; c < 3; c++) {
+        for (int h = 0; h < input_height; h++) {
+            for (int w = 0; w < input_width; w++) {
+                input_tensor[c * input_height * input_width + h * input_width + w] =
+                    channels[c].at<float>(h, w);
+            }
+        }
+    }
+}
+
+std::vector<Detection> YOLOInference::infer(const cv::Mat& image) {
+    std::vector<Detection> detections;
+
+    if (!model_loaded || session == nullptr) {
+        std::cerr << "ERROR: Model not loaded!" << std::endl;
+        return detections;
+    }
+
+    if (image.empty()) {
+        std::cerr << "ERROR: Input image is empty!" << std::endl;
+        return detections;
+    }
+
+    try {
+        // 准备输入
+        std::vector<float> input_tensor;
+        prepareInput(image, input_tensor);
+
+        // 创建输入张量
+        std::vector<int64_t> input_shape = {1, 3, input_height, input_width};
+
+        auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value input_tensor_ort = Ort::Value::CreateTensor<float>(
+            memory_info,
+            input_tensor.data(),
+            input_tensor.size(),
+            input_shape.data(),
+            input_shape.size()
+        );
+
+        // 运行推理
+        auto output_tensors = session->Run(
+            Ort::RunOptions{nullptr},
+            input_names.data(),
+            &input_tensor_ort,
+            1,
+            output_names.data(),
+            output_names.size()
+        );
+
+        // 获取输出数据
+        float* output_data = output_tensors[0].GetTensorMutableData<float>();
+        auto type_info = output_tensors[0].GetTensorTypeAndShapeInfo();
+        size_t output_size = type_info.GetElementCount();
+
+        std::cout << "Output size: " << output_size << std::endl;
+
+        // 转换为 vector
+        std::vector<float> output_vector(output_data, output_data + output_size);
+
+        // 后处理
+        detections = postprocess(image, output_vector);
+
+    } catch (const Ort::Exception& e) {
+        std::cerr << "ERROR: Inference failed - " << e.what() << std::endl;
+    }
+
+    return detections;
+}
+
+std::vector<Detection> YOLOInference::postprocess(const cv::Mat& image,
+                                                   const std::vector<float>& output) {
+    std::vector<Detection> detections;
+
+    // YOLOv8 输出格式: [1, 84, 8400]
+    // 展平后: 1 * 84 * 8400 = 705600
+    // 布局: [batch, features, anchors]
+
+    int num_classes = 80;
+    int num_anchors = 8400;
+    int features = 84;  // 4 (box) + 80 (classes)
+
+    float x_factor = image.cols / static_cast<float>(input_width);
+    float y_factor = image.rows / static_cast<float>(input_height);
+
+    std::cout << "Processing " << num_anchors << " anchors..." << std::endl;
+
+    for (int a = 0; a < num_anchors; a++) {
+        // 获取 box 坐标: [cx, cy, w, h]
+        // 索引: feature * num_anchors + anchor
+        float cx = output[0 * features * num_anchors + 0 * num_anchors + a];
+        float cy = output[0 * features * num_anchors + 1 * num_anchors + a];
+        float w = output[0 * features * num_anchors + 2 * num_anchors + a];
+        float h = output[0 * features * num_anchors + 3 * num_anchors + a];
+
+        // 获取类别分数
+        int class_id = 0;
+        float max_score = output[0 * features * num_anchors + 4 * num_anchors + a];
+
+        for (int c = 1; c < num_classes; c++) {
+            float score = output[0 * features * num_anchors + (4 + c) * num_anchors + a];
+            if (score > max_score) {
+                max_score = score;
+                class_id = c;
+            }
+        }
+
+        if (max_score >= conf_threshold) {
+            // 转换为中心点格式到左上角格式
+            int left = static_cast<int>((cx - 0.5f * w) * x_factor);
+            int top = static_cast<int>((cy - 0.5f * h) * y_factor);
+            int width = static_cast<int>(w * x_factor);
+            int height = static_cast<int>(h * y_factor);
+
+            // 边界检查
+            left = std::max(0, left);
+            top = std::max(0, top);
+            width = std::min(width, image.cols - left);
+            height = std::min(height, image.rows - top);
+
+            Detection det;
+            det.bbox = cv::Rect(left, top, width, height);
+            det.confidence = max_score;
+            det.class_id = class_id;
+            det.class_name = (class_id < static_cast<int>(classes.size())) ? classes[class_id] : "unknown";
+
+            detections.push_back(det);
+        }
+    }
+
+    std::cout << "Before NMS: " << detections.size() << " detections" << std::endl;
+
+    // 应用 NMS
+    return applyNMS(detections);
+}
+
+std::vector<Detection> YOLOInference::applyNMS(std::vector<Detection>& detections) {
+    std::vector<Detection> final_detections;
+
+    if (detections.empty()) {
+        return final_detections;
+    }
+
+    std::vector<int> indices;
+    std::vector<cv::Rect> boxes;
+    std::vector<float> scores;
+
+    for (const auto& det : detections) {
+        boxes.push_back(det.bbox);
+        scores.push_back(det.confidence);
+    }
+
+    cv::dnn::NMSBoxes(boxes, scores, conf_threshold, nms_threshold, indices);
+
+    for (int idx : indices) {
+        final_detections.push_back(detections[idx]);
+    }
+
+    std::cout << "After NMS: " << final_detections.size() << " detections" << std::endl;
+
+    return final_detections;
+}

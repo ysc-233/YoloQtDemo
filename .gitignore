@@ -1,0 +1,59 @@
+# --- 编译构建目录 ---
+build-*/
+cmake-build-*/
+Debug/
+Release/
+x64/
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.pdb
+*.ilk
+*.exp
+
+# --- Qt 特定文件 ---
+Makefile
+*.moc
+ui_*.h
+qrc_*.cpp
+*.user
+*.pro.user
+*.qmlc
+*.jsc
+ThirdParties/
+models/
+images/
+# --- OpenCV & ONNX Runtime (假设你在项目内放了这些库) ---
+# 如果你把 opencv 或 onnxruntime 源码/二进制放在了项目文件夹里，忽略它们
+opencv/
+opencv-build/
+onnxruntime/
+onnxruntime-build/
+lib/
+include/
+
+# --- IDE 特定文件 ---
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- 运行时产生的文件 ---
+detRes/
+logs/
+*.log
+
+# --- macOS ---
+.DS_Store
+
+# --- Windows ---
+Thumbs.db
